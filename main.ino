@@ -1,244 +1,254 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <ArduinoJson.h>  // Library untuk mempermudah pembuatan JSON
+
 #include "RelayControl.h"
+#include "MQTTClient.h"
+#include "SensorData.h"
+#include "DistanceSensor.h"
+#include "phSensor.h"
+#include "tdsSensor.h"  
 
 // Pengaturan Wi-Fi
-const char* ssid = "plerr.co";         // Ganti dengan nama Wi-Fi Anda
-const char* password = "pleerr22";     // Ganti dengan password Wi-Fi Anda
+const char* ssid = "plerr.co";         
+const char* password = "pleerr22";     
 
 // Pengaturan broker MQTT
-const char* mqtt_server = "192.168.100.85"; // Ganti dengan alamat IP broker Mosquitto lokal
-const int mqtt_port = 1883;               // Port broker MQTT
+const char* mqtt_server = "192.168.100.85"; 
+const int mqtt_port = 1883;              
 
 // Membuat objek relay
 RelayControl relays[] = {RelayControl(14), RelayControl(27), RelayControl(26), RelayControl(25)};
-const int numRelays = 4;
+MQTTClient mqttClient(mqtt_server, mqtt_port);
+SensorData sensorData;
 
-// Inisialisasi Wi-Fi dan MQTT client
-WiFiClient espClient;
-PubSubClient client(espClient);
-
-// Array untuk menyimpan status relay (ON/OFF)
-bool relayState[numRelays] = {false, false, false, false};
+bool relayState[4] = {false, false, false, false};
 
 unsigned long previousMillisSendData = 0;
-const long intervalSendData = 1000;
-unsigned long currentMillis = 0;
+const long intervalSendData = 1000;  // Interval pengambilan dan pengiriman data
 
-// Fungsi untuk menghubungkan ke Wi-Fi
-void setup_wifi() {
-  delay(10);
-  Serial.println();
-  Serial.print("Menghubungkan ke Wi-Fi ");
-  Serial.println(ssid);
+//Membuat objek LCD I2C
+LiquidCrystal_I2C lcd(0x27, 20, 4); 
+
+// Membuat objek sensor jarak (level Air)
+DistanceSensor distanceSensor(5, 18);  // (trigPin, echoPin)
+int percentage;
+
+// Membuat objek sensor temperature
+#define ONE_WIRE_BUS 32
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+float tempC;
+
+// Membuat objek sensor PH
+#define PH_PIN 34
+phSensor myPH(PH_PIN);
+float phValue;
+
+// Membuat objek sensor TDS 
+TdsSensor tdsSensor(35, 10, 0.7, 0.02);  // Pin TDS, jumlah sampel, kalibrasi EC, koefisien temperatur
+float tdsValue;
+
+void setup() {
+  Serial.begin(115200);
+
+  // Koneksi ke Wi-Fi
+  connectToWiFi();
   
+  // Koneksi MQTT
+  connectToMQTT();
+
+  // Subscribe ke topik perintah relay
+  subscribeToRelayTopics();
+
+  // Inisialisasi relay dan sensor
+  initializeDevices();
+
+  // pH Sensor
+  myPH.begin();
+  myPH.setCalibration(-5.70, 25.5); 
+
+  // Kirim data target ke topik /control/target
+  sendTargetData();
+}
+
+void loop() {
+  mqttClient.loop();
+  unsigned long currentMillis = millis();
+
+  // Mengambil data sensor setiap interval waktu
+  if (currentMillis - previousMillisSendData >= intervalSendData) {
+    previousMillisSendData += intervalSendData;
+
+    // Mengambil data dari semua sensor
+    phValue = getPhValue();
+    tempC = getTemperature();
+    tdsValue = getTdsValue();
+    percentage = getWaterLevel();
+
+    // Mengirimkan data sensor melalui MQTT
+    sendSensorData(phValue, tempC, tdsValue, percentage);
+  }
+
+  updateLCD();
+}
+
+// Koneksi WiFi
+void connectToWiFi() {
+  Serial.println("Menghubungkan WiFi ");
   WiFi.begin(ssid, password);
-  
-  // Tunggu sampai ESP32 terhubung ke Wi-Fi
-  unsigned long startTime = millis();
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
-    if (millis() - startTime > 10000) {  // Timeout setelah 10 detik
-      Serial.println("Gagal terhubung ke Wi-Fi");
-      return;
-    }
   }
-
   Serial.println("Terhubung ke Wi-Fi");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
 }
 
-// Fungsi untuk menangani callback MQTT
+// Koneksi MQTT
+void connectToMQTT() {
+  mqttClient.begin();
+  mqttClient.connect();
+  mqttClient.setCallback(mqtt_callback);
+}
+
+// Subscribe ke topik relay MQTT
+void subscribeToRelayTopics() {
+  for (int i = 1; i <= 4; i++) {
+    String topic = "/control/pump" + String(i);
+    mqttClient.subscribe(topic.c_str());
+  }
+}
+
+// Inisialisasi perangkat
+void initializeDevices() {
+  for (int i = 0; i < 4; i++) {
+    relays[i].begin();
+  }
+
+  sensors.begin();
+  distanceSensor.begin();
+  Wire.begin();
+  lcd.begin(20, 4);     
+  lcd.backlight();      
+  lcd.clear();
+  lcd.setCursor(0, 0);  
+}
+
+// Fungsi untuk mengambil nilai pH
+float getPhValue() {
+  myPH.update();
+  myPH.setTemperature(tempC);
+  return roundf(myPH.getPH() * 100.0) / 100.0;
+}
+
+// Fungsi untuk mendapatkan suhu
+float getTemperature() {
+  sensors.requestTemperatures();
+  tempC = sensors.getTempCByIndex(0);
+  return roundf(tempC * 10.0) / 10.0;
+}
+
+// Fungsi untuk menghitung nilai TDS
+float getTdsValue() {
+  float averageSensorValue = tdsSensor.readSensorValue();
+  float voltage = tdsSensor.calculateVoltage(averageSensorValue);
+  float ecValue = tdsSensor.calculateEC(voltage);
+  float ecTemperatureCompensated = tdsSensor.compensateECForTemperature(ecValue, tempC);
+  return tdsSensor.calculateTDS(ecTemperatureCompensated);
+}
+
+// Fungsi untuk mendapatkan level air dari sensor jarak
+int getWaterLevel() {
+  long distance = distanceSensor.measureDistance();
+  return distanceSensor.calculatePercentage(distance);
+}
+
+// Fungsi untuk mengirimkan data sensor ke MQTT
+void sendSensorData(float phValue, float tempC, float tdsValue, int percentage) {
+  sensorData.setRelayStatus(relayState);
+  sensorData.setPh(phValue);  
+  sensorData.setTds(tdsValue); 
+  sensorData.setTemperature(tempC);
+  sensorData.setWaterLevel(percentage);
+
+  sensorData.sendData(mqttClient, "/sensor/data");
+}
+
+// Fungsi untuk mengirimkan data target ke topik /control/target
+void sendTargetData() {
+  // Target Set Point pada saat inisiasi awal.
+  StaticJsonDocument<200> doc;
+  doc["targettds"] = 4.5;  // Target TDS
+  doc["targetph"] = 4.0;   // Target pH
+  doc["targettemperature"] = 3.7;  // Target suhu
+  doc["targetwaterLevel"] = 6.9;   // Target level air
+
+  // Serializing JSON to string
+  char jsonBuffer[512];
+  serializeJson(doc, jsonBuffer);
+
+  // Mengirimkan data ke MQTT
+  mqttClient.publish("/control/target", jsonBuffer);
+}
+
+// Callback MQTT untuk menerima perintah
 void mqtt_callback(char* topic, byte* payload, unsigned int length) {
   String message = "";
   for (int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
 
-  // Menampilkan topik dan pesan yang diterima
   Serial.print("Pesan diterima dari topik: ");
   Serial.println(topic);
   Serial.print("Isi pesan: ");
   Serial.println(message);
-  
+
   // Mengontrol relay sesuai perintah yang diterima
-  controlRelay(topic, message == "true");  // Nyalakan atau matikan relay berdasarkan pesan
+  controlRelay(topic, message == "true");
 }
 
-// Fungsi untuk menghubungkan ke broker MQTT
-void reconnect() {
-  // Loop sampai terhubung ke broker
-  while (!client.connected()) {
-    Serial.print("Mencoba untuk terhubung ke MQTT...\n");
-    if (client.connect("ESP32Client")) {
-      Serial.println("Terhubung ke broker MQTT");
-      
-      // Subscribe ke topik /control/pump1 hingga /control/pump4 untuk menerima perintah
-      for (int i = 1; i <= 4; i++) {
-        String topic = "/control/pump" + String(i);
-        client.subscribe(topic.c_str());
-        Serial.print("Berlangganan ke topik: ");
-        Serial.println(topic);
-      }
-    } else {
-      Serial.print("Gagal terhubung, status: ");
-      Serial.print(client.state());
-      delay(5000);  // Retry delay
-    }
-  }
-}
-
-void setup() {
-  // Inisialisasi Serial Monitor
-  Serial.begin(115200);
-
-  // Koneksi ke Wi-Fi
-  setup_wifi();
-
-  // Inisialisasi client MQTT
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(mqtt_callback);
-
-  // Inisialisasi semua relay menggunakan perulangan for
-  for (int i = 0; i < numRelays; i++) {
-    relays[i].begin();
-  }
-
-  // Memberikan informasi kepada pengguna melalui Serial Monitor
-  Serial.println("Masukkan perintah untuk mengontrol relay \n(contoh: relay1 true atau relay1 false):");
-  
-  // Subscribe ke topik status relay untuk menerima pembaruan status
-  for (int i = 0; i < numRelays; i++) {
-    String topic = "/control/pump" + String(i + 1);  // Topik seperti /control/pump1, /control/pump2, dll.
-    client.subscribe(topic.c_str());  // Subscribe ke topik perintah relay
-  }
-}
-
-void loop() {
-  currentMillis = millis();  // Ambil waktu sekarang
-
-  // Menjaga koneksi ke broker MQTT dan menerima pesan
-  if (!client.connected()) {
-    reconnect();
-  }
-  client.loop();  // Menjaga koneksi dengan broker MQTT
-
-  // Cek apakah ada data yang tersedia di Serial Monitor
-  if (Serial.available() > 0) {
-    // Membaca data dari Serial Monitor
-    String command = Serial.readStringUntil('\n');  // Membaca perintah sampai newline
-
-    // Menghapus karakter yang tidak perlu (newline, spasi, dll.)
-    command.trim();
-
-    // Memanggil fungsi untuk mengontrol relay berdasarkan perintah
-    controlRelay(command);
-  }
-
-  // Mengirimkan pembacaan sensor dan status relay dalam format JSON
-  sendSensorData();
-  
-  // Tambahkan sedikit delay untuk memberikan waktu bagi proses lain dan menghindari reset watchdog
-  // delay(1000); // Interval pengiriman data sensor (misalnya 1 detik)
-  yield();   // Memberikan kesempatan untuk menjalankan tugas lainnya
-}
-
-// Fungsi untuk mengontrol relay berdasarkan perintah
-void controlRelay(String command) {
-  // Menggunakan perulangan untuk mengontrol relay
-  for (int i = 0; i < numRelays; i++) {
-    String relayCommand = "relay" + String(i + 1);  // Membuat perintah seperti relay1, relay2, dll.
-    String topic = "/value/pump" + String(i + 1);  // Topik yang sesuai: /value/pump1, /value/pump2, dll.
-
-    if (command == relayCommand + " true" && !relayState[i]) {
-      relays[i].on();  // Nyalakan relay sesuai indeks
-      relayState[i] = true;  // Update status relay
-      Serial.println(relayCommand + " ON");
-    }
-    else if (command == relayCommand + " false" && relayState[i]) {
-      relays[i].off();  // Matikan relay sesuai indeks
-      relayState[i] = false;  // Update status relay
-      Serial.println(relayCommand + " OFF");
-    }
-  }
-  // Jika perintah tidak dikenali
-  if (command.indexOf("relay") == -1) {
-    Serial.println("Perintah tidak dikenali, coba lagi.");
-  }
-}
-
-// Fungsi untuk mengontrol relay berdasarkan topik dan nilai boolean
+// Fungsi untuk mengontrol relay berdasarkan perintah MQTT
 void controlRelay(char* topic, bool state) {
-  // Menampilkan topik yang diterima (untuk debugging)
-  Serial.print("Menerima perintah dari topik: ");
-  Serial.println(topic);
-
-  // Mendapatkan nomor relay dari topik dengan cara yang lebih tepat
-  String topicStr = String(topic);  // Mengubah char* menjadi String untuk pemrosesan lebih mudah
-  int relayIndex = -1;
-
-  // Mencari angka setelah "/value/pump"
-  int pos = topicStr.indexOf("pump");
-  if (pos != -1) {
-    // Mengambil angka setelah "pump" yang ada di dalam topik
-    relayIndex = topicStr.substring(pos + 4).toInt() - 1;  // Ambil angka setelah "pump" dan dikurangi 1
-  }
-
-  // Periksa apakah relayIndex valid (pastikan tidak keluar dari batas array)
-  if (relayIndex >= 0 && relayIndex < numRelays) {
-    // Mengontrol relay sesuai state yang diterima
-    if (state && !relayState[relayIndex]) {
-      relays[relayIndex].on();  // Nyalakan relay
-      relayState[relayIndex] = true;  // Update status relay
-      Serial.print("Relay ");
-      Serial.print(relayIndex + 1);
-      Serial.println(" ON");
-    } else if (!state && relayState[relayIndex]) {
-      relays[relayIndex].off();  // Matikan relay
-      relayState[relayIndex] = false;  // Update status relay
-      Serial.print("Relay ");
-      Serial.print(relayIndex + 1);
-      Serial.println(" OFF");
+  int relayIndex = topic[strlen(topic) - 1] - '1';  // Mengambil angka terakhir dari topik
+  if (relayIndex >= 0 && relayIndex < 4) {
+    if (state) {
+      relays[relayIndex].on();
+      relayState[relayIndex] = true;
+    } else {
+      relays[relayIndex].off();
+      relayState[relayIndex] = false;
     }
-  } else {
-    // Menangani kasus jika relayIndex tidak valid
-    Serial.print("Error: Relay index ");
-    Serial.print(relayIndex);
-    Serial.println(" tidak valid!");
   }
 }
 
-// Fungsi untuk mengirimkan data sensor dan status relay dalam format JSON
-void sendSensorData() {
-  if (currentMillis - previousMillisSendData >= intervalSendData) {
-    // Membuat objek JSON untuk mengemas data
-    StaticJsonDocument<200> doc;
+// Fungsi untuk mengupdate status di LCD
+void updateLCD() {
+  lcd.setCursor(0, 0);  // Set kursor ke baris 1
+  lcd.print("PH+:" + String(relayState[0] ? "ON " : "OFF"));
+  lcd.setCursor(0, 1);  // Set kursor ke baris 2
+  lcd.print("PH-:" + String(relayState[1] ? "ON " : "OFF"));
+  lcd.setCursor(8, 0);  // Set kursor ke baris 3
+  lcd.print("AB+:" + String(relayState[2] ? "ON " : "OFF"));
+  lcd.setCursor(8, 1);  // Set kursor ke baris 4
+  lcd.print("AB-:" + String(relayState[3] ? "ON " : "OFF"));
 
-    // Menyimpan data sensor ke dalam JSON
-    doc["tds"] = 350.0;         // Contoh data sensor TDS
-    doc["ph"] = 7.2;            // Contoh data sensor pH
-    doc["temperature"] = 28.5;  // Contoh data sensor suhu
-    doc["waterLevel"] = 50;     // Contoh data sensor level air
+  lcd.setCursor(0, 2); 
+  lcd.print("Lvl:");
+  lcd.print(percentage);
+  lcd.print("%");
+  lcd.print(" Tmp:");
+  lcd.print(tempC, 1);
+  lcd.print((char)223);
+  lcd.print("C   ");
 
-    // Menyimpan status relay ke dalam JSON
-    JsonObject relayStatus = doc.createNestedObject("relayStatus");
-    for (int i = 0; i < numRelays; i++) {
-      relayStatus[String("relay" + String(i + 1))] = relayState[i] ? "true" : "false";
-    }
-
-    // Serialisasi JSON dan publish ke topik
-    char jsonBuffer[512];
-    serializeJson(doc, jsonBuffer);
-
-    const char* topic = "/sensor/data"; // Topik untuk mengirimkan data sensor
-    client.publish(topic, jsonBuffer);  // Mengirim data sensor dalam format JSON
-
-    // Menampilkan data JSON di Serial Monitor untuk debugging
-    Serial.print("Data sensor: ");
-    Serial.println(jsonBuffer);
-   previousMillisSendData = currentMillis;
-  }
+  lcd.setCursor(0, 3);
+  lcd.print("ph:");
+  lcd.print(phValue, 2);
+  
+  lcd.print(" tds:");
+  lcd.print(tdsValue, 2);
 }

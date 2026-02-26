@@ -7,13 +7,14 @@ RelayControl::RelayControl(int relayPin) {
 
 void RelayControl::begin() {
   pinMode(pin, OUTPUT);
-  off();
+  off();  // Pastikan relay dalam keadaan mati saat memulai
 }
 
 void RelayControl::on() {
   digitalWrite(pin, LOW);
   state = true;
 }
+
 void RelayControl::off() {
   digitalWrite(pin, HIGH);
   state = false;
