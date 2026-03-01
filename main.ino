@@ -5,6 +5,8 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <ArduinoJson.h>  // Library untuk mempermudah pembuatan JSON
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 
 #include "RelayControl.h"
 #include "MQTTClient.h"
@@ -53,6 +55,12 @@ float phValue;
 TdsSensor tdsSensor(35, 10, 0.7, 0.02);  // Pin TDS, jumlah sampel, kalibrasi EC, koefisien temperatur
 float tdsValue;
 
+//Membuat objek untuk NTP
+WiFiUDP udp;                      // Membuat objek UDP
+NTPClient timeClient(udp, "pool.ntp.org", 7 * 3600, 3600000);  // Inisialisasi client NTP dengan zona waktu lokal (misalnya GMT+7 = 7 jam) Zona waktu Indonesia
+unsigned long previousMillisTask = 0;
+const long intervalTask = 60000;
+
 void setup() {
   Serial.begin(115200);
 
@@ -74,11 +82,41 @@ void setup() {
 
   // Kirim data target ke topik /control/target
   sendTargetData();
+
+  // Inisialisasi NTP
+  timeClient.begin();
+  timeClient.update();  // Mengupdate waktu pertama kali
 }
 
 void loop() {
   mqttClient.loop();
   unsigned long currentMillis = millis();
+
+  // Update waktu dari server NTP setiap loop
+  timeClient.update();
+  
+  // Ambil jam dan menit dari waktu NTP
+  int currentHour = timeClient.getHours();
+  int currentMinute = timeClient.getMinutes();
+  // int currentSecond = timeClient.getSeconds();
+  
+  // Serial.print("Hour: ");
+  // Serial.print(currentHour);
+  // Serial.print(", Minute: ");
+  // Serial.println(currentMinute);
+
+  if (currentMillis - previousMillisTask >= intervalTask) {
+    previousMillisTask += intervalTask;
+  // Cek apakah jam adalah 6 pagi atau 4 sore dan lakukan pengecekan
+    if ((currentHour == 22 && currentMinute == 53) || (currentHour == 16 && currentMinute == 0)) {
+      // Panggil fungsi pengecekan sesuai kebutuhan Anda
+      scheduleTask();
+    }
+    Serial.print("Hour: ");
+    Serial.print(currentHour);
+    Serial.print(", Minute: ");
+    Serial.println(currentMinute);
+  }
 
   // Mengambil data sensor setiap interval waktu
   if (currentMillis - previousMillisSendData >= intervalSendData) {
@@ -251,4 +289,17 @@ void updateLCD() {
   
   lcd.print(" tds:");
   lcd.print(tdsValue, 2);
+}
+
+// Program Auto secara berkala pada waktu tertentu
+void scheduleTask() {
+  // int Hour = timeClient.getHours();
+  // int Minute = timeClient.getMinutes();
+
+  // Serial.print("Hour: ");
+  // Serial.print(Hour);
+  // Serial.print(", Minute: ");
+  // Serial.println(Minute);
+
+  Serial.println("Schedule Start");
 }

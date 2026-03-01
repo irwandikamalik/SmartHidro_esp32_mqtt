@@ -13,10 +13,17 @@ TdsSensor::TdsSensor(int tdsPin, int numSamples, float ecCalibration, float temp
 
 float TdsSensor::readSensorValue() {
   long total = 0;
+  unsigned long previousMillis = 0;  // Waktu sebelumnya
+  unsigned long interval = 10;  // Interval pembacaan sensor dalam ms
+
   for (int i = 0; i < _numSamples; i++) {
-    total += analogRead(_tdsPin);  // Membaca nilai dari sensor
-    delay(10);  // Delay kecil untuk stabilitas pembacaan
+    unsigned long currentMillis = millis();  // Ambil waktu saat ini
+    if (currentMillis - previousMillis >= interval) {  // Cek apakah waktu interval sudah lewat
+      total += analogRead(_tdsPin);  // Membaca nilai dari sensor
+      previousMillis = currentMillis;  // Update waktu sebelumnya
+    }
   }
+
   return total / _numSamples;  // Mengembalikan rata-rata pembacaan sensor
 }
 
