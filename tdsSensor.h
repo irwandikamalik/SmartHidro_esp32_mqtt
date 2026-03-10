@@ -1,26 +1,40 @@
-#ifndef TDSSENSOR_H
-#define TDSSENSOR_H
+#ifndef TDS_SENSOR_H
+#define TDS_SENSOR_H
 
 #include <Arduino.h>
 
-class TdsSensor {
+class TDSSensor {
+
   public:
-    TdsSensor(int tdsPin, int numSamples, float ecCalibration, float tempCoefficient);
-    float readSensorValue();
-    float calculateVoltage(float averageSensorValue);
-    float calculateEC(float voltage);
-    float compensateECForTemperature(float ecValue, float temperature);
-    float calculateTDS(float ecTemperatureCompensated);
+
+    TDSSensor(uint8_t pin, float vref = 3.3);
+
+    void begin();
+    void update();
+
+    float getVoltage();
+    float getEC();
     float getTDS();
 
+    void setTemperature(float temp);
+
   private:
-    int _tdsPin;
-    int _numSamples;
-    float _ecCalibration;
-    float _tempCoefficient;
-    float _voltage;
-    float _ecValue;
-    float _tdsValue;
+
+    uint8_t _pin;
+    float _vref;
+    float _temperature;
+
+    static const int SAMPLE_COUNT = 15;
+    int buffer[SAMPLE_COUNT];
+    int bufferIndex;
+
+    unsigned long lastSampleTime;
+
+    int getMedian(int *array, int len);
+
+    float voltage;
+    float ec;
+    float tds;
 };
 
 #endif

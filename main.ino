@@ -52,8 +52,9 @@ phSensor myPH(PH_PIN);
 float phValue;
 float phThreshold;
 float tdsThreshold;
+
 // Membuat objek sensor TDS 
-TdsSensor tdsSensor(35, 10, 0.7, 0.02);  // Pin TDS, jumlah sampel, kalibrasi EC, koefisien temperatur
+TDSSensor tdsSensor(35);  // Pin TDS, jumlah sampel, kalibrasi EC, koefisien temperatur
 float tdsValue;
 
 //Membuat objek untuk NTP
@@ -81,6 +82,9 @@ void setup() {
   // pH Sensor
   myPH.begin();
   myPH.setCalibration(-5.70, 25.5); 
+
+  //tds sensor
+  tdsSensor.begin();
 
   // Kirim data target ke topik /control/target
   sendTargetData();
@@ -222,11 +226,10 @@ float getTemperature() {
 
 // Fungsi untuk menghitung nilai TDS
 float getTdsValue() {
-  float averageSensorValue = tdsSensor.readSensorValue();
-  float voltage = tdsSensor.calculateVoltage(averageSensorValue);
-  float ecValue = tdsSensor.calculateEC(voltage);
-  float ecTemperatureCompensated = tdsSensor.compensateECForTemperature(ecValue, tempC);
-  return tdsSensor.calculateTDS(ecTemperatureCompensated);
+  tdsSensor.setTemperature(tempC);  // kirim suhu dari DS18B20
+  tdsSensor.update();               // update pembacaan
+
+  return roundf(tdsSensor.getTDS() * 10.0) / 10.0;
 }
 
 // Fungsi untuk mendapatkan level air dari sensor jarak

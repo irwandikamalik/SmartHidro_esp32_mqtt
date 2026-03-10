@@ -1,50 +1,87 @@
 #include "tdsSensor.h"
 
-// Constructor
-TdsSensor::TdsSensor(int tdsPin, int numSamples, float ecCalibration, float tempCoefficient) {
-  _tdsPin = tdsPin;
-  _numSamples = numSamples;
-  _ecCalibration = ecCalibration;
-  _tempCoefficient = tempCoefficient;
-  _voltage = 0.0;
-  _ecValue = 0.0;
-  _tdsValue = 0.0;
+#define ADC_RANGE 4095
+#define SAMPLE_INTERVAL 40
+
+TDSSensor::TDSSensor(uint8_t pin, float vref) {
+  _pin = pin;
+  _vref = vref;
+  _temperature = 25.0;
+  bufferIndex = 0;
+  lastSampleTime = 0;
 }
 
-float TdsSensor::readSensorValue() {
-  long total = 0;
-  unsigned long previousMillis = 0;  // Waktu sebelumnya
-  unsigned long interval = 10;  // Interval pembacaan sensor dalam ms
+void TDSSensor::begin() {
 
-  for (int i = 0; i < _numSamples; i++) {
-    unsigned long currentMillis = millis();  // Ambil waktu saat ini
-    if (currentMillis - previousMillis >= interval) {  // Cek apakah waktu interval sudah lewat
-      total += analogRead(_tdsPin);  // Membaca nilai dari sensor
-      previousMillis = currentMillis;  // Update waktu sebelumnya
+  analogReadResolution(12);
+  analogSetPinAttenuation(_pin, ADC_11db);
+}
+
+void TDSSensor::setTemperature(float temp) {
+  _temperature = temp;
+}
+
+void TDSSensor::update() {
+
+  unsigned long now = millis();
+
+  if (now - lastSampleTime >= SAMPLE_INTERVAL) {
+
+    lastSampleTime = now;
+
+    buffer[bufferIndex] = analogRead(_pin);
+    bufferIndex++;
+
+    if (bufferIndex >= SAMPLE_COUNT)
+      bufferIndex = 0;
+
+    int median = getMedian(buffer, SAMPLE_COUNT);
+
+    voltage = median * _vref / ADC_RANGE;
+
+    float ecValue = (133.42 * pow(voltage, 3)
+                    -255.86 * pow(voltage, 2)
+                    +857.39 * voltage);
+
+    float ec25 = ecValue / (1.0 + 0.02 * (_temperature - 25.0));
+
+    ec = ec25;
+    tds = ec25 * 0.5;
+  }
+}
+
+float TDSSensor::getVoltage() {
+  return voltage;
+}
+
+float TDSSensor::getEC() {
+  return ec;
+}
+
+float TDSSensor::getTDS() {
+  return tds;
+}
+
+int TDSSensor::getMedian(int *array, int len) {
+
+  int temp[len];
+
+  for (int i = 0; i < len; i++)
+    temp[i] = array[i];
+
+  for (int j = 0; j < len - 1; j++) {
+    for (int i = 0; i < len - j - 1; i++) {
+
+      if (temp[i] > temp[i + 1]) {
+        int t = temp[i];
+        temp[i] = temp[i + 1];
+        temp[i + 1] = t;
+      }
     }
   }
 
-  return total / _numSamples;  // Mengembalikan rata-rata pembacaan sensor
-}
-
-float TdsSensor::calculateVoltage(float averageSensorValue) {
-  return (averageSensorValue / 4095.0) * 3.3;  // 3.3V adalah tegangan referensi ESP32
-}
-
-float TdsSensor::calculateEC(float voltage) {
-  _ecValue = _ecCalibration * voltage;  // Menggunakan kalibrasi untuk menghitung EC
-  return _ecValue;
-}
-
-float TdsSensor::compensateECForTemperature(float ecValue, float temperature) {
-  return ecValue * (1 + _tempCoefficient * (temperature - 25));  // Temp kompensasi pada 25°C
-}
-
-float TdsSensor::calculateTDS(float ecTemperatureCompensated) {
-  _tdsValue = ecTemperatureCompensated * 500;  // Menggunakan konversi umum dari EC ke TDS (ppm)
-  return _tdsValue;
-}
-
-float TdsSensor::getTDS() {
-  return _tdsValue;
+  if (len % 2)
+    return temp[(len - 1) / 2];
+  else
+    return (temp[len / 2] + temp[len / 2 - 1]) / 2;
 }
