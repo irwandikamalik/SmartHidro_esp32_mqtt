@@ -20,7 +20,7 @@ const char* ssid = "plerr.co";
 const char* password = "pleerr22";     
 
 // Pengaturan broker MQTT
-const char* mqtt_server = "192.168.100.85"; 
+const char* mqtt_server = "192.168.100.161"; 
 const int mqtt_port = 1883;              
 
 // Membuat objek relay
@@ -50,7 +50,8 @@ float tempC;
 #define PH_PIN 34
 phSensor myPH(PH_PIN);
 float phValue;
-
+float phThreshold;
+float tdsThreshold;
 // Membuat objek sensor TDS 
 TdsSensor tdsSensor(35, 10, 0.7, 0.02);  // Pin TDS, jumlah sampel, kalibrasi EC, koefisien temperatur
 float tdsValue;
@@ -60,6 +61,7 @@ WiFiUDP udp;                      // Membuat objek UDP
 NTPClient timeClient(udp, "pool.ntp.org", 7 * 3600, 3600000);  // Inisialisasi client NTP dengan zona waktu lokal (misalnya GMT+7 = 7 jam) Zona waktu Indonesia
 unsigned long previousMillisTask = 0;
 const long intervalTask = 60000;
+bool hasRun = false;
 
 void setup() {
   Serial.begin(115200);
@@ -105,17 +107,23 @@ void loop() {
   // Serial.print(", Minute: ");
   // Serial.println(currentMinute);
 
+  //INTERVAL 60 Detik
   if (currentMillis - previousMillisTask >= intervalTask) {
     previousMillisTask += intervalTask;
   // Cek apakah jam adalah 6 pagi atau 4 sore dan lakukan pengecekan
-    if ((currentHour == 22 && currentMinute == 53) || (currentHour == 16 && currentMinute == 0)) {
+    if (((currentHour == 7 && currentMinute == 0) || (currentHour == 16 && currentMinute == 0)) && !hasRun) {
       // Panggil fungsi pengecekan sesuai kebutuhan Anda
       scheduleTask();
+      hasRun = true;
     }
-    Serial.print("Hour: ");
-    Serial.print(currentHour);
-    Serial.print(", Minute: ");
-    Serial.println(currentMinute);
+
+    if (currentMinute != 0) {
+      hasRun = false;
+    }
+    // Serial.print("Hour: ");
+    // Serial.print(currentHour);
+    // Serial.print(", Minute: ");
+    // Serial.println(currentMinute);
   }
 
   // Mengambil data sensor setiap interval waktu
@@ -133,6 +141,28 @@ void loop() {
   }
 
   updateLCD();
+}
+
+// Program Auto secara berkala pada waktu tertentu
+void scheduleTask() {
+
+  Serial.println("Schedule Start");
+
+  //pengecekan PH
+  if (phValue < phThreshold) {
+    //menambahkan ph dengan menjalankan ph up
+  
+  }else if (phValue > phThreshold) {
+    //mengurangi ph dengan menjalankan ph down
+
+  }
+
+  //Pengecekan TDS
+  if (tdsValue < tdsThreshold) {
+    //mennambahkan nutrisi dengan menjalankan ab mix
+
+  }
+
 }
 
 // Koneksi WiFi
@@ -291,15 +321,3 @@ void updateLCD() {
   lcd.print(tdsValue, 2);
 }
 
-// Program Auto secara berkala pada waktu tertentu
-void scheduleTask() {
-  // int Hour = timeClient.getHours();
-  // int Minute = timeClient.getMinutes();
-
-  // Serial.print("Hour: ");
-  // Serial.print(Hour);
-  // Serial.print(", Minute: ");
-  // Serial.println(Minute);
-
-  Serial.println("Schedule Start");
-}
