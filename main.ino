@@ -13,28 +13,28 @@
 #include "SensorData.h"
 #include "DistanceSensor.h"
 #include "phSensor.h"
-#include "tdsSensor.h"  
+#include "tdsSensor.h"
 
 // Pengaturan Wi-Fi
-const char* ssid = "plerr.co";         
-const char* password = "pleerr22";     
+const char* ssid = "plerr.co";
+const char* password = "pleerr22";
 
 // Pengaturan broker MQTT
-const char* mqtt_server = "192.168.100.161"; 
-const int mqtt_port = 1883;              
+const char* mqtt_server = "192.168.100.161";
+const int mqtt_port = 1883;
 
 // Membuat objek relay
-RelayControl relays[] = {RelayControl(14), RelayControl(27), RelayControl(26), RelayControl(25)};
+RelayControl relays[] = { RelayControl(14), RelayControl(27), RelayControl(26), RelayControl(25) };
 MQTTClient mqttClient(mqtt_server, mqtt_port);
 SensorData sensorData;
 
-bool relayState[4] = {false, false, false, false};
+bool relayState[4] = { false, false, false, false };
 
 unsigned long timerSendData = 0;
 const long intervalSendData = 1000;  // Interval pengambilan dan pengiriman data
 
 //Membuat objek LCD I2C
-LiquidCrystal_I2C lcd(0x27, 20, 4); 
+LiquidCrystal_I2C lcd(0x27, 20, 4);
 unsigned long timerLcd = 0;
 const long intervalLcd = 1000;
 
@@ -55,12 +55,12 @@ float phValue;
 float phThreshold = 6;
 float tdsThreshold = 600;
 
-// Membuat objek sensor TDS 
+// Membuat objek sensor TDS
 TDSSensor tdsSensor(35);  // Pin TDS, jumlah sampel, kalibrasi EC, koefisien temperatur
 float tdsValue;
 
 //Membuat objek untuk NTP
-WiFiUDP udp;                      // Membuat objek UDP
+WiFiUDP udp;                                                   // Membuat objek UDP
 NTPClient timeClient(udp, "pool.ntp.org", 7 * 3600, 3600000);  // Inisialisasi client NTP dengan zona waktu lokal (misalnya GMT+7 = 7 jam) Zona waktu Indonesia
 unsigned long timerTask = 0;
 const long intervalTask = 60000;
@@ -74,7 +74,7 @@ void setup() {
 
   // Koneksi ke Wi-Fi
   connectToWiFi();
-  
+
   // Koneksi MQTT
   connectToMQTT();
 
@@ -86,7 +86,7 @@ void setup() {
 
   // pH Sensor
   myPH.begin();
-  myPH.setCalibration(-5.70, 25.5); 
+  myPH.setCalibration(-5.70, 25.5);
 
   //tds sensor
   tdsSensor.begin();
@@ -111,12 +111,12 @@ void loop() {
 
   // Update waktu dari server NTP setiap loop
   timeClient.update();
-  
+
   // Ambil jam dan menit dari waktu NTP
   int currentHour = timeClient.getHours();
   int currentMinute = timeClient.getMinutes();
   // int currentSecond = timeClient.getSeconds();
-  
+
   // Serial.print("Hour: ");
   // Serial.print(currentHour);
   // Serial.print(", Minute: ");
@@ -125,12 +125,12 @@ void loop() {
   //INTERVAL 60 Detik
   if (now - timerTask >= intervalTask) {
     timerTask = now;
-  
-  if(!autoMode) {
-    Serial.println("Mode Auto Mati");
-    return;
-  }
-  // Cek apakah jam adalah 6 pagi atau 4 sore dan lakukan pengecekan
+
+    if (!autoMode) {
+      Serial.println("Mode Auto Mati");
+      return;
+    }
+    // Cek apakah jam adalah 6 pagi atau 4 sore dan lakukan pengecekan
     if (((currentHour == 7 && currentMinute == 0) || (currentHour == 16 && currentMinute == 0)) && !hasRun) {
       // Panggil fungsi pengecekan sesuai kebutuhan Anda
       scheduleTask();
@@ -303,8 +303,8 @@ void initializeDevices() {
   sensors.begin();
   distanceSensor.begin();
   Wire.begin();
-  lcd.begin(20, 4);     
-  lcd.backlight();      
+  lcd.begin(20, 4);
+  lcd.backlight();
   lcd.clear();
 }
 
@@ -339,8 +339,8 @@ int getWaterLevel() {
 // Fungsi untuk mengirimkan data sensor ke MQTT
 void sendSensorData(float phValue, float tempC, float tdsValue, int percentage) {
   sensorData.setRelayStatus(relayState);
-  sensorData.setPh(phValue);  
-  sensorData.setTds(tdsValue); 
+  sensorData.setPh(phValue);
+  sensorData.setTds(tdsValue);
   sensorData.setTemperature(tempC);
   sensorData.setWaterLevel(percentage);
 
@@ -398,7 +398,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 
       Serial.println("Reboot command received!");
 
-      delay(1000); // beri waktu serial print
+      delay(1000);  // beri waktu serial print
       ESP.restart();
     }
 
@@ -427,8 +427,7 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
 
       // Serial.print("TDS Threshold: ");
       // Serial.println(tdsThreshold);
-    } 
-    else {
+    } else {
       Serial.println("JSON parse failed");
     }
 
@@ -464,7 +463,7 @@ void updateLCD() {
   lcd.setCursor(8, 1);  // Set kursor ke baris 4
   lcd.print("AB-:" + String(relayState[3] ? "ON " : "OFF"));
 
-  lcd.setCursor(0, 2); 
+  lcd.setCursor(0, 2);
   lcd.print("Lvl:");
   lcd.print(percentage);
   lcd.print("%");
@@ -476,8 +475,7 @@ void updateLCD() {
   lcd.setCursor(0, 3);
   lcd.print("ph:");
   lcd.print(phValue, 2);
-  
+
   lcd.print(" tds:");
   lcd.print(tdsValue, 2);
 }
-

@@ -19,6 +19,7 @@ class MQTTClient {
     void publish(const char* topic, const char* message);
     void loop();
     void setCallback(MQTT_CALLBACK_SIGNATURE);
+    bool connected();
 };
 
 #endif

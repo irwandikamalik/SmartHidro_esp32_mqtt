@@ -36,3 +36,8 @@ void MQTTClient::loop() {
 void MQTTClient::setCallback(MQTT_CALLBACK_SIGNATURE) {
   client.setCallback(callback);
 }
+
+bool MQTTClient::connected() {
+  return client.connected();
+}
+
