@@ -69,6 +69,17 @@ bool hasRun = false;
 //Konfigurasi Automatis Dosing
 bool autoMode = true;
 
+// State untuk Auto Dosing
+enum DosingState { IDLE, CHECK_PH, PH_UP, PH_DOWN, CHECK_TDS, TDS_ADD, MIXING, FINISHED };
+DosingState dosingState = IDLE;
+
+int dosingCycle = 0;
+const int maxDosingCycle = 5;
+bool dosingPerformed = false;
+unsigned long dosingTimer = 0;
+const unsigned long dosingDelay = 2000; // 2 detik untuk tiap relay
+const unsigned long mixingDelay = 60000; // 60 detik mixing
+
 void setup() {
   Serial.begin(115200);
 
@@ -77,9 +88,6 @@ void setup() {
 
   // Koneksi MQTT
   connectToMQTT();
-
-  // Subscribe ke topik perintah relay
-  subscribeToRelayTopics();
 
   // Inisialisasi relay dan sensor
   initializeDevices();
@@ -122,30 +130,10 @@ void loop() {
   // Serial.print(", Minute: ");
   // Serial.println(currentMinute);
 
-  //INTERVAL 60 Detik
-  if (now - timerTask >= intervalTask) {
-    timerTask = now;
-
-    if (!autoMode) {
-      Serial.println("Mode Auto Mati");
-      return;
-    }
-    // Cek apakah jam adalah 6 pagi atau 4 sore dan lakukan pengecekan
-    if (((currentHour == 7 && currentMinute == 0) || (currentHour == 16 && currentMinute == 0)) && !hasRun) {
-      // Panggil fungsi pengecekan sesuai kebutuhan Anda
-      scheduleTask();
-      hasRun = true;
-    }
-
-    if (currentMinute != 0) {
-      hasRun = false;
-    }
-    // Serial.print("Hour: ");
-    // Serial.print(currentHour);
-    // Serial.print(", Minute: ");
-    // Serial.println(currentMinute);
+  if (autoMode && ((currentHour == 7 && currentMinute == 0) || (currentHour == 16 && currentMinute == 0))) {
+      UpdateDosing();
   }
-
+  
   // Mengambil data sensor setiap interval waktu
   if (now - timerSendData >= intervalSendData) {
     timerSendData = now;
@@ -159,100 +147,110 @@ void loop() {
     // Mengirimkan data sensor melalui MQTT
     sendSensorData(phValue, tempC, tdsValue, percentage);
   }
+
   if (now - timerLcd >= intervalLcd) {
     timerLcd = now;
     updateLCD();
   }
 }
-// Program Auto secara berkala pada waktu tertentu
-void scheduleTask() {
 
-  int cycle = 0;
-  int maxCycle = 5;
+void UpdateDosing() {
+  unsigned long now = millis();
 
-  Serial.println("Start Dosing");
-
-  while (cycle < maxCycle) {
-
-    tempC = getTemperature();
-    phValue = getPhValue();
-    tdsValue = getTdsValue();
-
-    Serial.print("Cycle: ");
-    Serial.println(cycle + 1);
-
-    Serial.print("PH: ");
-    Serial.println(phValue);
-
-    Serial.print("TDS: ");
-    Serial.println(tdsValue);
-
-    bool dosingPerformed = false;
-
-    // PH CONTROL
-
-    if (phValue < phThreshold) {
-
-      Serial.println("PH UP");
-
-      relays[0].on();
-      relayState[0] = true;
-      delay(2000);
-      relays[0].off();
-      relayState[0] = false;
-
-      dosingPerformed = true;
-    }
-
-    else if (phValue > phThreshold) {
-
-      Serial.println("PH DOWN");
-
-      relays[1].on();
-      relayState[1] = true;
-      delay(2000);
-      relays[1].off();
-      relayState[1] = false;
-
-      dosingPerformed = true;
-    }
-
-    // TDS CONTROL
-
-    if (tdsValue < tdsThreshold) {
-
-      Serial.println("ADD A&B MIX");
-
-      relays[2].on();
-      relays[3].on();
-      relayState[2] = true;
-      relayState[3] = true;
-
-      delay(2000);
-
-      relays[2].off();
-      relays[3].off();
-      relayState[2] = false;
-      relayState[3] = false;
-
-      dosingPerformed = true;
-    }
-
-    // Jika tidak ada dosing maka selesai
-    if (!dosingPerformed) {
-
-      Serial.println("Target Reached");
+  switch (dosingState) {
+    case IDLE:
+      dosingCycle = 0;
+      dosingState = CHECK_PH;
+      dosingPerformed = false;
+      Serial.println("Start Dosing");
       break;
-    }
 
-    // Tunggu mixing
-    Serial.println("Mixing 60s...");
-    delay(60000);
+    case CHECK_PH:
+      tempC = getTemperature();
+      phValue = getPhValue();
+      tdsValue = getTdsValue();
+      Serial.print("Cycle: "); Serial.println(dosingCycle + 1);
+      Serial.print("PH: "); Serial.println(phValue);
+      Serial.print("TDS: "); Serial.println(tdsValue);
 
-    cycle++;
+      dosingPerformed = false;
+
+      if (phValue < phThreshold) {
+        dosingState = PH_UP;
+        dosingTimer = now;
+        relays[0].on(); relayState[0] = true;
+        Serial.println("PH UP ON");
+      } else if (phValue > phThreshold) {
+        dosingState = PH_DOWN;
+        dosingTimer = now;
+        relays[1].on(); relayState[1] = true;
+        Serial.println("PH DOWN ON");
+      } else {
+        dosingState = CHECK_TDS;
+      }
+      break;
+
+    case PH_UP:
+      if (now - dosingTimer >= dosingDelay) {
+        relays[0].off(); relayState[0] = false;
+        Serial.println("PH UP OFF");
+        dosingPerformed = true;
+        dosingState = CHECK_TDS;
+      }
+      break;
+
+    case PH_DOWN:
+      if (now - dosingTimer >= dosingDelay) {
+        relays[1].off(); relayState[1] = false;
+        Serial.println("PH DOWN OFF");
+        dosingPerformed = true;
+        dosingState = CHECK_TDS;
+      }
+      break;
+
+    case CHECK_TDS:
+      if (tdsValue < tdsThreshold) {
+        dosingState = TDS_ADD;
+        dosingTimer = now;
+        relays[2].on(); relays[3].on();
+        relayState[2] = true; relayState[3] = true;
+        Serial.println("TDS ADD ON");
+      } else {
+        dosingState = MIXING;
+        dosingTimer = now;
+      }
+      break;
+
+    case TDS_ADD:
+      if (now - dosingTimer >= dosingDelay) {
+        relays[2].off(); relays[3].off();
+        relayState[2] = false; relayState[3] = false;
+        Serial.println("TDS ADD OFF");
+        dosingPerformed = true;
+        dosingState = MIXING;
+        dosingTimer = now;
+      }
+      break;
+
+    case MIXING:
+      if (!dosingPerformed) {
+        Serial.println("Target Reached, skip mixing");
+        dosingState = FINISHED;
+      } else if (now - dosingTimer >= mixingDelay) {
+        dosingCycle++;
+        if (dosingCycle < maxDosingCycle) {
+          dosingState = CHECK_PH;
+        } else {
+          dosingState = FINISHED;
+        }
+      }
+      break;
+
+    case FINISHED:
+      Serial.println("Dosing Finished");
+      dosingState = IDLE; // Reset untuk siklus berikutnya
+      break;
   }
-
-  Serial.println("Dosing Finished");
 }
 
 // Koneksi WiFi
@@ -271,6 +269,7 @@ void connectToMQTT() {
   mqttClient.begin();
   mqttClient.connect();
   mqttClient.setCallback(mqtt_callback);
+  subscribeToRelayTopics();
 }
 
 // Subscribe ke topik relay MQTT
