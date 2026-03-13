@@ -19,7 +19,7 @@ long DistanceSensor::measureDistance() {
     digitalWrite(trigPin, LOW);
 
     // Membaca durasi waktu echo
-    long duration = pulseIn(echoPin, HIGH);
+    long duration = pulseIn(echoPin, HIGH, 30000);
 
     // Menghitung jarak (cm)
     long distance = duration * 0.0344 / 2;

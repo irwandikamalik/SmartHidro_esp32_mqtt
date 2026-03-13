@@ -30,11 +30,13 @@ SensorData sensorData;
 
 bool relayState[4] = {false, false, false, false};
 
-unsigned long previousMillisSendData = 0;
+unsigned long timerSendData = 0;
 const long intervalSendData = 1000;  // Interval pengambilan dan pengiriman data
 
 //Membuat objek LCD I2C
 LiquidCrystal_I2C lcd(0x27, 20, 4); 
+unsigned long timerLcd = 0;
+const long intervalLcd = 1000;
 
 // Membuat objek sensor jarak (level Air)
 DistanceSensor distanceSensor(5, 18);  // (trigPin, echoPin)
@@ -50,8 +52,8 @@ float tempC;
 #define PH_PIN 34
 phSensor myPH(PH_PIN);
 float phValue;
-float phThreshold;
-float tdsThreshold;
+float phThreshold = 6;
+float tdsThreshold = 600;
 
 // Membuat objek sensor TDS 
 TDSSensor tdsSensor(35);  // Pin TDS, jumlah sampel, kalibrasi EC, koefisien temperatur
@@ -60,9 +62,12 @@ float tdsValue;
 //Membuat objek untuk NTP
 WiFiUDP udp;                      // Membuat objek UDP
 NTPClient timeClient(udp, "pool.ntp.org", 7 * 3600, 3600000);  // Inisialisasi client NTP dengan zona waktu lokal (misalnya GMT+7 = 7 jam) Zona waktu Indonesia
-unsigned long previousMillisTask = 0;
+unsigned long timerTask = 0;
 const long intervalTask = 60000;
 bool hasRun = false;
+
+//Konfigurasi Automatis Dosing
+bool autoMode = true;
 
 void setup() {
   Serial.begin(115200);
@@ -95,8 +100,14 @@ void setup() {
 }
 
 void loop() {
+  if (!mqttClient.connected()) {
+    Serial.println("MQTT reconnecting...");
+    connectToMQTT();
+    subscribeToRelayTopics();
+  }
+
   mqttClient.loop();
-  unsigned long currentMillis = millis();
+  unsigned long now = millis();
 
   // Update waktu dari server NTP setiap loop
   timeClient.update();
@@ -112,8 +123,13 @@ void loop() {
   // Serial.println(currentMinute);
 
   //INTERVAL 60 Detik
-  if (currentMillis - previousMillisTask >= intervalTask) {
-    previousMillisTask += intervalTask;
+  if (now - timerTask >= intervalTask) {
+    timerTask = now;
+  
+  if(!autoMode) {
+    Serial.println("Mode Auto Mati");
+    return;
+  }
   // Cek apakah jam adalah 6 pagi atau 4 sore dan lakukan pengecekan
     if (((currentHour == 7 && currentMinute == 0) || (currentHour == 16 && currentMinute == 0)) && !hasRun) {
       // Panggil fungsi pengecekan sesuai kebutuhan Anda
@@ -131,42 +147,112 @@ void loop() {
   }
 
   // Mengambil data sensor setiap interval waktu
-  if (currentMillis - previousMillisSendData >= intervalSendData) {
-    previousMillisSendData += intervalSendData;
+  if (now - timerSendData >= intervalSendData) {
+    timerSendData = now;
 
     // Mengambil data dari semua sensor
-    phValue = getPhValue();
     tempC = getTemperature();
+    phValue = getPhValue();
     tdsValue = getTdsValue();
     percentage = getWaterLevel();
 
     // Mengirimkan data sensor melalui MQTT
     sendSensorData(phValue, tempC, tdsValue, percentage);
   }
-
-  updateLCD();
+  if (now - timerLcd >= intervalLcd) {
+    timerLcd = now;
+    updateLCD();
+  }
 }
-
 // Program Auto secara berkala pada waktu tertentu
 void scheduleTask() {
 
-  Serial.println("Schedule Start");
+  int cycle = 0;
+  int maxCycle = 5;
 
-  //pengecekan PH
-  if (phValue < phThreshold) {
-    //menambahkan ph dengan menjalankan ph up
-  
-  }else if (phValue > phThreshold) {
-    //mengurangi ph dengan menjalankan ph down
+  Serial.println("Start Dosing");
 
+  while (cycle < maxCycle) {
+
+    tempC = getTemperature();
+    phValue = getPhValue();
+    tdsValue = getTdsValue();
+
+    Serial.print("Cycle: ");
+    Serial.println(cycle + 1);
+
+    Serial.print("PH: ");
+    Serial.println(phValue);
+
+    Serial.print("TDS: ");
+    Serial.println(tdsValue);
+
+    bool dosingPerformed = false;
+
+    // PH CONTROL
+
+    if (phValue < phThreshold) {
+
+      Serial.println("PH UP");
+
+      relays[0].on();
+      relayState[0] = true;
+      delay(2000);
+      relays[0].off();
+      relayState[0] = false;
+
+      dosingPerformed = true;
+    }
+
+    else if (phValue > phThreshold) {
+
+      Serial.println("PH DOWN");
+
+      relays[1].on();
+      relayState[1] = true;
+      delay(2000);
+      relays[1].off();
+      relayState[1] = false;
+
+      dosingPerformed = true;
+    }
+
+    // TDS CONTROL
+
+    if (tdsValue < tdsThreshold) {
+
+      Serial.println("ADD A&B MIX");
+
+      relays[2].on();
+      relays[3].on();
+      relayState[2] = true;
+      relayState[3] = true;
+
+      delay(2000);
+
+      relays[2].off();
+      relays[3].off();
+      relayState[2] = false;
+      relayState[3] = false;
+
+      dosingPerformed = true;
+    }
+
+    // Jika tidak ada dosing maka selesai
+    if (!dosingPerformed) {
+
+      Serial.println("Target Reached");
+      break;
+    }
+
+    // Tunggu mixing
+    Serial.println("Mixing 60s...");
+    delay(60000);
+
+    cycle++;
   }
 
-  //Pengecekan TDS
-  if (tdsValue < tdsThreshold) {
-    //mennambahkan nutrisi dengan menjalankan ab mix
-
-  }
-
+  Serial.println("Dosing Finished");
 }
 
 // Koneksi WiFi
@@ -193,6 +279,19 @@ void subscribeToRelayTopics() {
     String topic = "/control/pump" + String(i);
     mqttClient.subscribe(topic.c_str());
   }
+  mqttClient.subscribe("/control/auto");
+  mqttClient.subscribe("/control/reboot");
+  mqttClient.subscribe("/control/threshold");
+}
+
+//publish Auto State
+void publishAutoStatus() {
+
+  if (autoMode) {
+    mqttClient.publish("/state/auto", "true");
+  } else {
+    mqttClient.publish("/state/auto", "false");
+  }
 }
 
 // Inisialisasi perangkat
@@ -207,7 +306,6 @@ void initializeDevices() {
   lcd.begin(20, 4);     
   lcd.backlight();      
   lcd.clear();
-  lcd.setCursor(0, 0);  
 }
 
 // Fungsi untuk mengambil nilai pH
@@ -247,23 +345,22 @@ void sendSensorData(float phValue, float tempC, float tdsValue, int percentage) 
   sensorData.setWaterLevel(percentage);
 
   sensorData.sendData(mqttClient, "/sensor/data");
+  publishAutoStatus();
 }
 
 // Fungsi untuk mengirimkan data target ke topik /control/target
 void sendTargetData() {
   // Target Set Point pada saat inisiasi awal.
   StaticJsonDocument<200> doc;
-  doc["targettds"] = 4.5;  // Target TDS
-  doc["targetph"] = 4.0;   // Target pH
-  doc["targettemperature"] = 3.7;  // Target suhu
-  doc["targetwaterLevel"] = 6.9;   // Target level air
+  doc["tds"] = 600;  // Target TDS
+  doc["ph"] = 6.0;   // Target pH
 
   // Serializing JSON to string
   char jsonBuffer[512];
   serializeJson(doc, jsonBuffer);
 
   // Mengirimkan data ke MQTT
-  mqttClient.publish("/control/target", jsonBuffer);
+  mqttClient.publish("/control/threshold", jsonBuffer);
 }
 
 // Callback MQTT untuk menerima perintah
@@ -273,10 +370,70 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length) {
     message += (char)payload[i];
   }
 
-  Serial.print("Pesan diterima dari topik: ");
-  Serial.println(topic);
-  Serial.print("Isi pesan: ");
-  Serial.println(message);
+  // Serial.print("Pesan diterima dari topik: ");
+  // Serial.println(topic);
+  // Serial.print("Isi pesan: ");
+  // Serial.println(message);
+
+  //Auto Mode
+  if (String(topic) == "/control/auto") {
+    if (message == "true") {
+      autoMode = true;
+    } else {
+      autoMode = false;
+    }
+
+    publishAutoStatus();
+
+    Serial.print("Auto Mode: ");
+    Serial.println(autoMode ? "ON" : "OFF");
+
+    return;
+  }
+
+  //Reboot Devices
+  if (String(topic) == "/control/reboot") {
+
+    if (message == "true") {
+
+      Serial.println("Reboot command received!");
+
+      delay(1000); // beri waktu serial print
+      ESP.restart();
+    }
+
+    return;
+  }
+
+  //threshold Data
+  if (String(topic) == "/control/threshold") {
+
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, message);
+
+    if (!error) {
+
+      if (doc.containsKey("ph")) {
+        phThreshold = doc["ph"];
+      }
+
+      if (doc.containsKey("tds")) {
+        tdsThreshold = doc["tds"];
+      }
+
+      // Serial.println("Threshold Updated");
+      // Serial.print("PH Threshold: ");
+      // Serial.println(phThreshold);
+
+      // Serial.print("TDS Threshold: ");
+      // Serial.println(tdsThreshold);
+    } 
+    else {
+      Serial.println("JSON parse failed");
+    }
+
+    return;
+  }
 
   // Mengontrol relay sesuai perintah yang diterima
   controlRelay(topic, message == "true");
